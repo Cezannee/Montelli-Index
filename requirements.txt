@@ -1,4 +1,5 @@
 discord.py
 yfinance
 python-dotenv
-flask
+beautifulsoup4
+requests
