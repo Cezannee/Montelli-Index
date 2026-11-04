@@ -8,13 +8,13 @@ from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 
-# Load env vars
+# Load environment variables
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CH_ID"))
-TARGET_HARGA = float(os.getenv("TARGET"))
+TARGET_PRICE = float(os.getenv("TARGET"))
 
-# Setup intents
+# Configure gateway intents
 intents = discord.Intents.default()
 intents.reactions = True
 intents.messages = True
@@ -27,7 +27,7 @@ client = discord.Client(intents=intents)
 reaction_message_id = None
 DATA_FILE = "subscribers.json"
 
-# Load/save subscribers
+# Load and save subscribers
 def load_subscribers():
     try:
         with open(DATA_FILE, "r") as f:
@@ -41,24 +41,24 @@ def save_subscribers(users):
 
 subscribed_users = load_subscribers()
 
-# Dapatkan sesi pasar (WIB)
+# Get the market session (Western Indonesian Time, UTC+7)
 def get_session_info():
-    now = datetime.now(timezone(timedelta(hours=7)))  # timezone WIB
+    now = datetime.now(timezone(timedelta(hours=7)))  # Western Indonesian Time (UTC+7)
     hour, minute = now.hour, now.minute
-    jam = hour + minute / 60
+    time_in_hours = hour + minute / 60
 
-    if jam < 9:
-        return "❌ Pasar belum buka", False
-    elif 9 <= jam < 12:
-        return "🟢 Sesi 1", True
-    elif 12 <= jam < 13.5:
-        return "⏸ Istirahat", False
-    elif 13.5 <= jam < 15:
-        return "🟢 Sesi 2", True
+    if time_in_hours < 9:
+        return "❌ Market not open yet", False
+    elif 9 <= time_in_hours < 12:
+        return "🟢 Session 1", True
+    elif 12 <= time_in_hours < 13.5:
+        return "⏸ Market break", False
+    elif 13.5 <= time_in_hours < 15:
+        return "🟢 Session 2", True
     else:
-        return "🔒 Pasar Tutup", False
+        return "🔒 Market closed", False
 
-# Ambil harga BBCA dari Google Finance
+# Fetch the BBCA price from Google Finance
 def get_bbca_price_from_google():
     try:
         url = "https://www.google.com/finance/quote/BBCA:IDX"
@@ -68,27 +68,27 @@ def get_bbca_price_from_google():
         tag = soup.select_one("div.YMlKec.fxKbKc")
 
         if tag:
-            harga_str = tag.text.strip().replace("Rp", "").replace(",", "").replace(".", "")
-            return float(harga_str) / 100  # Google kadang tampilkan format sen
+            price_text = tag.text.strip().replace("Rp", "").replace(",", "").replace(".", "")
+            return float(price_text) / 100  # Google Finance may display prices with fractional currency units
         return None
     except Exception as e:
-        print(f"❌ Error ambil harga: {e}")
+        print(f"❌ Error fetching price: {e}")
         return None
 
-# Kirim pesan reaksi awal
+# Post the initial reaction message
 async def post_reaction_message():
     global reaction_message_id
     channel = client.get_channel(CHANNEL_ID)
-    msg = await channel.send("Tekan ✅ untuk **notifikasi target harga BBCA**, ❌ untuk unsubscribe.")
+    msg = await channel.send("React with ✅ to **subscribe to BBCA target price alerts**, or ❌ to unsubscribe.")
     await msg.add_reaction("✅")
     await msg.add_reaction("❌")
     reaction_message_id = msg.id
 
 @client.event
 async def on_ready():
-    print(f"✅ Bot login sebagai {client.user}")
+    print(f"✅ Bot logged in as {client.user}")
     await post_reaction_message()
-    asyncio.create_task(cek_harga_per_jam())
+    asyncio.create_task(check_price_hourly())
 
 @client.event
 async def on_raw_reaction_add(payload):
@@ -97,11 +97,11 @@ async def on_raw_reaction_add(payload):
     if str(payload.emoji) == "✅":
         subscribed_users.add(payload.user_id)
         save_subscribers(subscribed_users)
-        print(f"🟢 User {payload.user_id} SUBSCRIBED")
+        print(f"🟢 User {payload.user_id} subscribed")
     elif str(payload.emoji) == "❌":
         subscribed_users.discard(payload.user_id)
         save_subscribers(subscribed_users)
-        print(f"🔴 User {payload.user_id} UNSUBSCRIBED")
+        print(f"🔴 User {payload.user_id} unsubscribed")
 
 @client.event
 async def on_raw_reaction_remove(payload):
@@ -110,47 +110,47 @@ async def on_raw_reaction_remove(payload):
     if str(payload.emoji) == "✅":
         subscribed_users.discard(payload.user_id)
         save_subscribers(subscribed_users)
-        print(f"🔴 User {payload.user_id} UNSUBSCRIBED (reaction removed)")
+        print(f"🔴 User {payload.user_id} unsubscribed (reaction removed)")
 
-# Cek harga BBCA dan kirim notifikasi
-async def cek_harga_per_jam():
+# Check the BBCA price and send an update
+async def check_price_hourly():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
 
     while not client.is_closed():
         try:
-            now = datetime.now(timezone(timedelta(hours=7)))  # WIB
-            waktu_str = now.strftime("%H:%M")
-            sesi_status, is_open = get_session_info()
+            now = datetime.now(timezone(timedelta(hours=7)))  # Western Indonesian Time (UTC+7)
+            time_str = now.strftime("%H:%M")
+            session_status, is_open = get_session_info()
 
             if is_open:
-                harga = get_bbca_price_from_google()
-                if harga:
-                    pesan = f"📊 **Update Saham BBCA [Pukul {waktu_str} WIB]**\n"
-                    pesan += f"- 🕒 Status Pasar: {sesi_status}\n"
-                    pesan += f"- 🎯 Target: Rp.{TARGET_HARGA:,.0f}"
-                    pesan += f"- 💰 Harga Saat Ini: **Rp{harga:,.0f}**"
+                price = get_bbca_price_from_google()
+                if price:
+                    message = f"📊 **BBCA Stock Update [{time_str} WIB]**\n"
+                    message += f"- 🕒 Market status: {session_status}\n"
+                    message += f"- 🎯 Target: Rp {TARGET_PRICE:,.0f}\n"
+                    message += f"- 💰 Current price: **Rp {price:,.0f}**"
 
-                    if harga > TARGET_HARGA and subscribed_users:
+                    if price > TARGET_PRICE and subscribed_users:
                         mention = " ".join(f"<@{uid}>" for uid in subscribed_users)
-                        pesan += f"\n🚨 **Harga melewati Rp{TARGET_HARGA:,.0f}!** {mention}"
+                        message += f"\n🚨 **Price is above Rp {TARGET_PRICE:,.0f}!** {mention}"
                 else:
-                    pesan = f"⚠️ Gagal mengambil harga BBCA [Pukul {waktu_str} WIB]"
+                    message = f"⚠️ Failed to fetch the BBCA price [{time_str} WIB]"
             else:
-                pesan = (
-                    f"🔒 **Pasar Tidak Aktif [Pukul {waktu_str} WIB]**\n"
-                    f"- 🕒 Status: {sesi_status}\n"
-                    f"- 💤 Update harga akan dilanjutkan saat pasar buka."
+                message = (
+                    f"🔒 **Market Inactive [{time_str} WIB]**\n"
+                    f"- 🕒 Status: {session_status}\n"
+                    f"- 💤 Price updates will resume when the market opens."
                 )
 
-            await channel.send(pesan)
+            await channel.send(message)
             await asyncio.sleep(3600)
 
         except Exception as e:
-            print(f"❌ Error di loop harga: {e}")
+            print(f"❌ Error in price update loop: {e}")
             await asyncio.sleep(3600)
 
-# Jalankan bot
+# Run the bot
 async def main():
     async with client:
         await client.start(TOKEN)
